@@ -1,20 +1,11 @@
+import 'dart:async';
 import 'dart:io';
-import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_blue_plus/flutter_blue_plus.dart';
+import 'package:permission_handler/permission_handler.dart';
 
 class Home extends StatefulWidget {
   const Home({super.key, required this.title});
-
-  // This widget is the home page of your application. It is stateful, meaning
-  // that it has a State object (defined below) that contains fields that affect
-  // how it looks.
-
-  // This class is the configuration for the state. It holds the values (in this
-  // case the title) provided by the parent (in this case the App widget) and
-  // used by the build method of the State. Fields in a Widget subclass are
-  // always marked "final".
-
   final String title;
 
   @override
@@ -22,94 +13,77 @@ class Home extends StatefulWidget {
 }
 
 class _HomeState extends State<Home> {
-  int _counter = 0;
+  StreamSubscription? _scanSub;
+  StreamSubscription? _adapterSub;
+
+  Future<void> _ensurePermissions() async {
+    if (!Platform.isAndroid) return;
+
+    final res =
+        await [
+          Permission.bluetoothScan,
+          Permission.bluetoothConnect,
+          Permission.locationWhenInUse,
+        ].request();
+
+    final denied = res.entries.where((e) => !e.value.isGranted).toList();
+    if (denied.isNotEmpty) {
+      throw Exception("Permessi negati: $denied");
+    }
+  }
 
   Future<void> initializeBluetooth() async {
     if (await FlutterBluePlus.isSupported == false) {
-      print("Bluetooth not supported by this device");
+      print("Bluetooth non supportato");
       return;
     }
 
+    await _ensurePermissions();
 
-    var subscription = FlutterBluePlus.adapterState.listen((
-      BluetoothAdapterState state,
-    ) {
-      print("state: $state");
-      if (state == BluetoothAdapterState.on) {
-        var subscription = FlutterBluePlus.onScanResults.listen((results) {
-          if (results.isNotEmpty) {
-            print("result not emply");
-            for (var r in results) {
-              print(
-                '${r.device.remoteId}: "${r.advertisementData.advName}" found!',
-              );
-            }
-          } else {
-            print("result  empty");
-          }
-        }, onError: (e) => print(e));
-      } else {
-        // show an error to the user, etc
-      }
+    _adapterSub?.cancel();
+    _adapterSub = FlutterBluePlus.adapterState.listen((state) async {
+      print("adapter state: $state");
+      if (state != BluetoothAdapterState.on) return;
+
+      _scanSub?.cancel();
+      _scanSub = FlutterBluePlus.scanResults.listen((results) {
+        if (results.isEmpty) {
+          print("scan batch vuoto");
+          return;
+        }
+        ScanResult result =
+            results.where((r) => r.device.platformName == ("SMART")).first;
+        result.device.connect(license: License.free, autoConnect: false);
+        for (final r in results) {
+          print(
+            "${r.device.remoteId} adv='${r.advertisementData.advName}' "
+            "platformiooo='${r.device.platformName}' rssi=${r.rssi}",
+          );
+        }
+      }, onError: (e) => print("scan error: $e"));
+
+      print("START SCAN");
+      await FlutterBluePlus.startScan(timeout: const Duration(seconds: 10));
     });
+  }
 
-    // turn on bluetooth ourself if we can
-    // for iOS, the user controls bluetooth enable/disable
-
-    // cancel to prevent duplicate listeners
-    subscription.cancel();
+  @override
+  void dispose() {
+    _scanSub?.cancel();
+    _adapterSub?.cancel();
+    super.dispose();
   }
 
   @override
   Widget build(BuildContext context) {
-    // This method is rerun every time setState is called, for instance as done
-    // by the _incrementCounter method above.
-    //
-    // The Flutter framework has been optimized to make rerunning build methods
-    // fast, so that you can just rebuild anything that needs updating rather
-    // than having to individually change instances of widgets.
     return Scaffold(
-      appBar: AppBar(
-        // TRY THIS: Try changing the color here to a specific color (to
-        // Colors.amber, perhaps?) and trigger a hot reload to see the AppBar
-        // change color while the other colors stay the same.
-        backgroundColor: Theme.of(context).colorScheme.inversePrimary,
-        // Here we take the value from the Home object that was created by
-        // the App.build method, and use it to set our appbar title.
-        title: Text(widget.title),
-      ),
-      body: Center(
-        // Center is a layout widget. It takes a single child and positions it
-        // in the middle of the parent.
-        child: Column(
-          // Column is also a layout widget. It takes a list of children and
-          // arranges them vertically. By default, it sizes itself to fit its
-          // children horizontally, and tries to be as tall as its parent.
-          //
-          // Column has various properties to control how it sizes itself and
-          // how it positions its children. Here we use mainAxisAlignment to
-          // center the children vertically; the main axis here is the vertical
-          // axis because Columns are vertical (the cross axis would be
-          // horizontal).
-          //
-          // TRY THIS: Invoke "debug painting" (choose the "Toggle Debug Paint"
-          // action in the IDE, or press "p" in the console), to see the
-          // wireframe for each widget.
-          mainAxisAlignment: MainAxisAlignment.center,
-          children: <Widget>[
-            const Text('You have pushed the button this many times:'),
-            Text(
-              '$_counter',
-              style: Theme.of(context).textTheme.headlineMedium,
-            ),
-          ],
-        ),
-      ),
+      appBar: AppBar(title: Text(widget.title)),
       floatingActionButton: FloatingActionButton(
-        onPressed: initializeBluetooth,
-        tooltip: 'Increment',
-        child: const Icon(Icons.add),
-      ), // This trailing comma makes auto-formatting nicer for build methods.
+        onPressed: () => {initializeBluetooth},
+
+        child: const Icon(Icons.play_arrow),
+      ),
+      body: const Center(child: Text("Premi play per scansionare BLE")),
     );
   }
 }
